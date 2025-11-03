@@ -359,7 +359,7 @@ async function findNearestPackageJson(startDir: string) {
     try {
       await fs.access(candidate);
       return { packageJsonPath: candidate, packageDir: current };
-    } catch (error) {
+    } catch {
       // Continue searching upwards.
     }
 
