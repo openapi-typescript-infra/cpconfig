@@ -1,0 +1,189 @@
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { describe, expect, test } from 'vitest';
+import { syncConfigs } from './index';
+
+describe('syncConfigs', () => {
+  test('creates files and manages gitignore', async () => {
+    await withTempDir(async (rootDir) => {
+      const result = await syncConfigs(
+        {
+          'env/.env.local': {
+            contents: 'TOKEN=secret',
+          },
+          '.secrets.yml': {
+            contents: 'aws_access_key_id: example',
+          },
+        },
+        { rootDir },
+      );
+
+      expect(result.files.map(({ action }) => action)).toEqual(['created', 'created']);
+      expect(result.gitignore.updated).toBe(true);
+      expect(result.gitignore.added).toEqual(['env/.env.local', '.secrets.yml']);
+
+      await expect(readFile(path.join(rootDir, 'env/.env.local'), 'utf8')).resolves.toBe('TOKEN=secret');
+      await expect(readFile(path.join(rootDir, '.secrets.yml'), 'utf8')).resolves.toBe(
+        'aws_access_key_id: example',
+      );
+
+      const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('# Managed by cpconfig');
+      expect(gitignore).toContain('env/.env.local');
+      expect(gitignore).toContain('.secrets.yml');
+    });
+  });
+
+  test('is idempotent when rerun with same definitions', async () => {
+    await withTempDir(async (rootDir) => {
+      const files = {
+        'config.json': { contents: '{"name":"first"}' },
+        'nested/settings.yml': { contents: 'enabled: true' },
+      };
+
+      await syncConfigs(files, { rootDir });
+      const result = await syncConfigs(files, { rootDir });
+
+      expect(result.files.every(({ action }) => action === 'unchanged')).toBe(true);
+      expect(result.gitignore.updated).toBe(false);
+      expect(result.gitignore.added).toEqual([]);
+      expect(result.gitignore.removed).toEqual([]);
+    });
+  });
+
+  test('updates file contents and prunes gitignore entries', async () => {
+    await withTempDir(async (rootDir) => {
+      await syncConfigs(
+        {
+          'config/a.json': { contents: '{"name":"a"}' },
+          'config/b.json': { contents: '{"name":"b"}' },
+        },
+        { rootDir },
+      );
+
+      const result = await syncConfigs(
+        { 'config/a.json': { contents: '{"name":"updated"}' } },
+        { rootDir },
+      );
+
+      expect(result.files).toEqual([
+        expect.objectContaining({ path: 'config/a.json', action: 'updated' }),
+      ]);
+      expect(result.gitignore.updated).toBe(true);
+      expect(result.gitignore.added).toEqual([]);
+      expect(result.gitignore.removed).toEqual(['config/b.json']);
+
+      const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('config/a.json');
+      expect(gitignore).not.toContain('config/b.json');
+    });
+  });
+
+  test('dry run reports actions without writing files', async () => {
+    await withTempDir(async (rootDir) => {
+      const result = await syncConfigs(
+        {
+          'config/app.json': { contents: '{"dry":true}' },
+        },
+        {
+          rootDir,
+          dryRun: true,
+        },
+      );
+
+      expect(result.files).toEqual([
+        expect.objectContaining({ path: 'config/app.json', action: 'created' }),
+      ]);
+      expect(result.gitignore.updated).toBe(true);
+      expect(result.gitignore.skipped).toBe(false);
+
+      await expect(readFile(path.join(rootDir, 'config/app.json'), 'utf8')).rejects.toThrowError();
+      await expect(readFile(path.join(rootDir, '.gitignore'), 'utf8')).rejects.toThrowError();
+    });
+  });
+
+  test('respects gitignore: false flag', async () => {
+    await withTempDir(async (rootDir) => {
+      await syncConfigs(
+        {
+          'visible.log': { contents: 'visible', gitignore: false },
+          'secret.log': { contents: 'secret' },
+        },
+        { rootDir },
+      );
+
+      const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('secret.log');
+      expect(gitignore).not.toContain('visible.log');
+    });
+  });
+
+  test('rejects paths that escape the configured root directory', async () => {
+    await withTempDir(async (rootDir) => {
+      await expect(
+        syncConfigs(
+          {
+            '../outside.txt': { contents: 'nope' },
+          },
+          { rootDir },
+        ),
+      ).rejects.toThrowError(/must reside within the root directory/);
+
+      await expect(
+        syncConfigs(
+          {
+            [path.join(rootDir, 'absolute.txt')]: { contents: 'absolute' },
+          },
+          { rootDir },
+        ),
+      ).rejects.toThrowError(/must be relative to the root directory/);
+    });
+  });
+
+  test('supports functional contents', async () => {
+    await withTempDir(async (rootDir) => {
+      let invocations = 0;
+
+      await syncConfigs(
+        {
+          'dynamic.txt': {
+            contents: () => {
+              invocations += 1;
+              return `value-${invocations}`;
+            },
+          },
+        },
+        { rootDir },
+      );
+
+      await expect(readFile(path.join(rootDir, 'dynamic.txt'), 'utf8')).resolves.toBe('value-1');
+
+      const result = await syncConfigs(
+        {
+          'dynamic.txt': {
+            contents: () => {
+              invocations += 1;
+              return `value-${invocations}`;
+            },
+          },
+        },
+        { rootDir },
+      );
+
+      expect(result.files[0]?.action).toBe('updated');
+      await expect(readFile(path.join(rootDir, 'dynamic.txt'), 'utf8')).resolves.toBe('value-2');
+    });
+  });
+});
+
+async function withTempDir<T>(callback: (rootDir: string) => Promise<T>): Promise<T> {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'cpconfig-test-'));
+
+  try {
+    await mkdir(rootDir, { recursive: true });
+    return await callback(rootDir);
+  } finally {
+    await rm(rootDir, { recursive: true, force: true });
+  }
+}

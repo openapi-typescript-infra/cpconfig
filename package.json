@@ -1,0 +1,59 @@
+{
+  "name": "cpconfig",
+  "version": "0.0.0",
+  "description": "A simple zero dependency utility to manage configuration files for node projects across your organization",
+  "main": "build/index.js",
+  "types": "build/index.d.ts",
+  "bin": {
+    "cpconfig": "build/cli.js"
+  },
+  "author": "Developers <developers@pyralis.com>",
+  "license": "UNLICENSED",
+  "packageManager": "yarn@3.8.5",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "clean": "yarn dlx rimraf ./dist",
+    "lint": "eslint .",
+    "test": "vitest"
+  },
+  "keywords": [
+    "typescript"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openapi-typescript-infra/cpconfig.git"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "release": {
+    "branches": [
+      "main"
+    ],
+    "plugins": [
+      "@semantic-release/commit-analyzer",
+      "@semantic-release/release-notes-generator",
+      [
+        "@semantic-release/exec",
+        {
+          "publishCmd": "yarn dlx pinst --disable"
+        }
+      ],
+      "@semantic-release/npm",
+      "@semantic-release/github"
+    ]
+  },
+  "devDependencies": {
+    "@semantic-release/exec": "^7.1.0",
+    "@semantic-release/github": "^12.0.0",
+    "@types/node": "^24.9.1",
+    "@typescript-eslint/eslint-plugin": "^8.46.2",
+    "@typescript-eslint/parser": "^8.46.2",
+    "eslint": "^9.38.0",
+    "eslint-config-prettier": "^10.1.8",
+    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-plugin-import": "^2.32.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.3"
+  }
+}
