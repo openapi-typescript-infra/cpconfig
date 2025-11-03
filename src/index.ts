@@ -196,7 +196,9 @@ function normalizeFiles(files: ConfigMap, rootDir: string): NormalizedConfigFile
       relativePath.startsWith('..') ||
       relativePath.split(path.sep).some((segment) => segment === '..')
     ) {
-      throw new Error(`Config file path "${rawPath}" must reside within the root directory "${rootDir}"`);
+      throw new Error(
+        `Config file path "${rawPath}" must reside within the root directory "${rootDir}"`,
+      );
     }
 
     const normalizedRelative = normalizeRelativePath(relativePath);
@@ -231,7 +233,11 @@ function resolveContents(rawContents: ConfigEntry['contents'], filePath: string)
       return value;
     }
 
-    if (value && typeof (value as unknown) === 'object' && 'then' in (value as Record<string, unknown>)) {
+    if (
+      value &&
+      typeof (value as unknown) === 'object' &&
+      'then' in (value as Record<string, unknown>)
+    ) {
       throw new Error(`Async contents are not supported for "${filePath}"`);
     }
 
@@ -358,7 +364,10 @@ function uniqueNormalized(entries: string[]): string[] {
   return result;
 }
 
-async function readFileIfPresent(filePath: string, encoding: BufferEncoding): Promise<string | null> {
+async function readFileIfPresent(
+  filePath: string,
+  encoding: BufferEncoding,
+): Promise<string | null> {
   try {
     return await fs.readFile(filePath, { encoding });
   } catch (error) {
@@ -403,7 +412,9 @@ function extractManagedBlock(content: string): ManagedBlockExtraction {
     blockEnd += 1;
   }
 
-  const managedEntries = lines.slice(commentIndex + 1, blockEnd).filter((line) => line.trim() !== '');
+  const managedEntries = lines
+    .slice(commentIndex + 1, blockEnd)
+    .filter((line) => line.trim() !== '');
   const before = lines.slice(0, commentIndex);
   const after = lines.slice(blockEnd);
 

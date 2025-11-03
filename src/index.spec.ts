@@ -23,7 +23,9 @@ describe('syncConfigs', () => {
       expect(result.gitignore.updated).toBe(true);
       expect(result.gitignore.added).toEqual(['env/.env.local', '.secrets.yml']);
 
-      await expect(readFile(path.join(rootDir, 'env/.env.local'), 'utf8')).resolves.toBe('TOKEN=secret');
+      await expect(readFile(path.join(rootDir, 'env/.env.local'), 'utf8')).resolves.toBe(
+        'TOKEN=secret',
+      );
       await expect(readFile(path.join(rootDir, '.secrets.yml'), 'utf8')).resolves.toBe(
         'aws_access_key_id: example',
       );

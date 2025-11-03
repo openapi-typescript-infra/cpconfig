@@ -54,7 +54,7 @@ Run the function as many times as you like—it is idempotent and only touches f
 
 ## Package-driven configuration
 
-Most projects will declare their config files directly in `package.json` and call the bundled CLI as part of
+Most projects keep their file definitions in a dedicated module and call the bundled CLI as part of
 `postinstall`:
 
 ```json
@@ -63,18 +63,33 @@ Most projects will declare their config files directly in `package.json` and cal
   "scripts": {
     "postinstall": "cpconfig"
   },
-  "cpconfig": {
-    "files": {
-      "config/.env.local": { "contents": "API_TOKEN=abc123" },
-      ".secrets.json": { "contents": "{\n  \"key\": \"value\"\n}" }
-    }
+  "config": {
+    "cpconfig": "./cpconfig.config.mjs"
   }
 }
 ```
 
 The CLI walks up from the current working directory, finds the nearest `package.json`, and reads the `cpconfig`
-definition (or `config.cpconfig`). Definitions can either be an object of files (as above) or an object with
-`{ "files": { ... }, "options": { ... } }`, mirroring the programmatic API.
+definition (preferring `config.cpconfig`). When the value is a string, `cpconfig` resolves and imports that module
+using standard Node.js resolution. The module can export either:
+
+- a default or named `config` object with `{ files, options }`;
+- a plain object map of files;
+- a factory function (sync or async) returning either of the above.
+
+For example, `cpconfig.config.mjs` might look like:
+
+```js
+export default {
+  files: {
+    'config/.env.local': { contents: 'API_TOKEN=abc123' },
+    '.secrets.json': { contents: '{\n  "key": "value"\n}' },
+  },
+};
+```
+
+If you prefer, you can still embed the object directly in `package.json` under either `cpconfig` or `config.cpconfig`.
+Module exports simply provide a cleaner home for larger definitions or shared packages.
 
 - Run `npx cpconfig` manually whenever you need to refresh files.
 - Add `cpconfig` to `postinstall` to keep developer machines in sync automatically.

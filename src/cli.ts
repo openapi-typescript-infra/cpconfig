@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { promises as fs } from 'node:fs';
-import { pathToFileURL } from 'node:url';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   syncConfigs,
   type ConfigMap,
@@ -25,10 +26,12 @@ type CliFlags = {
   helpRequested: boolean;
 };
 
-type ConfigPayload = ConfigMap | {
-  files: ConfigMap;
-  options?: SyncOptions;
-};
+type ConfigPayload =
+  | ConfigMap
+  | {
+      files: ConfigMap;
+      options?: SyncOptions;
+    };
 
 type LoadedConfig = {
   files: ConfigMap;
@@ -61,7 +64,10 @@ export async function runCli(
     }
 
     if (flags.gitignorePath) {
-      options.gitignorePath = path.resolve(options.rootDir ?? loaded.packageDir, flags.gitignorePath);
+      options.gitignorePath = path.resolve(
+        options.rootDir ?? loaded.packageDir,
+        flags.gitignorePath,
+      );
     }
 
     if (flags.dryRun) {
@@ -165,12 +171,26 @@ async function loadConfig({ cwd, flags }: LoadConfigInput): Promise<LoadedConfig
   }
 
   const { packageJsonPath, packageDir } = await findNearestPackageJson(cwd);
-  const pkg = await readJsonFile(packageJsonPath) as PackageJson;
+  const pkg = (await readJsonFile(packageJsonPath)) as PackageJson;
 
   const rawPayload = pkg.cpconfig ?? pkg.config?.cpconfig;
 
   if (!rawPayload) {
     throw new Error(`No cpconfig definition found in ${packageJsonPath}`);
+  }
+
+  if (typeof rawPayload === 'string') {
+    const { parsed, source } = await loadConfigModule({
+      specifier: rawPayload,
+      packageDir,
+      origin: packageJsonPath,
+    });
+
+    return {
+      ...parsed,
+      packageDir,
+      source,
+    };
   }
 
   const parsed = parseConfigPayload(rawPayload, packageJsonPath);
@@ -182,10 +202,12 @@ async function loadConfig({ cwd, flags }: LoadConfigInput): Promise<LoadedConfig
   };
 }
 
+type ConfigSource = ConfigPayload | string;
+
 type PackageJson = {
-  cpconfig?: ConfigPayload;
+  cpconfig?: ConfigSource;
   config?: {
-    cpconfig?: ConfigPayload;
+    cpconfig?: ConfigSource;
   };
 };
 
@@ -208,7 +230,109 @@ function parseConfigPayload(payload: unknown, source: string): ParsedConfig {
     }
   }
 
-  throw new Error(`Invalid cpconfig definition in ${source}. Expected an object of files or { files, options }.`);
+  throw new Error(
+    `Invalid cpconfig definition in ${source}. Expected an object of files or { files, options }.`,
+  );
+}
+
+type LoadConfigModuleInput = {
+  specifier: string;
+  packageDir: string;
+  origin: string;
+};
+
+async function loadConfigModule({ specifier, packageDir, origin }: LoadConfigModuleInput) {
+  const { resolvedPath, url } = resolveModuleSpecifier(specifier, packageDir);
+
+  let imported: Record<string, unknown>;
+  try {
+    imported = await import(url);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Failed to load cpconfig module "${specifier}" referenced from ${origin}: ${message}`,
+    );
+  }
+
+  const exported = selectConfigExport(imported, resolvedPath);
+  const payload = await unwrapConfigFactory(exported, resolvedPath);
+  const parsed = parseConfigPayload(payload, resolvedPath);
+
+  return { parsed, source: resolvedPath };
+}
+
+function resolveModuleSpecifier(
+  specifier: string,
+  packageDir: string,
+): { resolvedPath: string; url: string } {
+  if (specifier.startsWith('file:')) {
+    const fileUrl = new URL(specifier);
+    const resolvedPath = fileURLToPath(fileUrl);
+    return { resolvedPath, url: fileUrl.href };
+  }
+
+  if (specifier.startsWith('.') || path.isAbsolute(specifier)) {
+    const resolvedPath = path.isAbsolute(specifier)
+      ? specifier
+      : path.resolve(packageDir, specifier);
+    return { resolvedPath, url: pathToFileURL(resolvedPath).href };
+  }
+
+  const requireFromPkg = createRequire(path.join(packageDir, 'package.json'));
+  try {
+    const resolvedPath = requireFromPkg.resolve(specifier);
+    return { resolvedPath, url: pathToFileURL(resolvedPath).href };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Unable to resolve cpconfig module "${specifier}" from ${packageDir}: ${message}`,
+    );
+  }
+}
+
+function selectConfigExport(imported: Record<string, unknown>, resolvedPath: string): unknown {
+  if ('default' in imported && imported.default !== undefined) {
+    return imported.default;
+  }
+
+  if ('config' in imported && imported.config !== undefined) {
+    return imported.config;
+  }
+
+  if ('files' in imported || 'options' in imported) {
+    return imported;
+  }
+
+  throw new Error(
+    `No usable export found in ${resolvedPath}. Expected a default export, "config", or an object containing files.`,
+  );
+}
+
+async function unwrapConfigFactory(exported: unknown, resolvedPath: string): Promise<unknown> {
+  if (typeof exported === 'function') {
+    try {
+      const result = (exported as () => unknown)();
+      if (isPromiseLike(result)) {
+        return await result;
+      }
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`cpconfig factory in ${resolvedPath} threw an error: ${message}`);
+    }
+  }
+
+  if (isPromiseLike(exported)) {
+    return await exported;
+  }
+
+  return exported;
+}
+
+function isPromiseLike(value: unknown): value is PromiseLike<unknown> {
+  return Boolean(
+    value && typeof value === 'object' && 'then' in (value as Record<string, unknown>),
+  );
 }
 
 function toConfigMap(value: Record<string, unknown>, source: string): ConfigMap {
@@ -284,18 +408,24 @@ function formatFileLine(file: SyncResult['files'][number]): string {
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && Object.prototype.toString.call(value) === '[object Object]');
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      Object.prototype.toString.call(value) === '[object Object]',
+  );
 }
 
 function buildHelpMessage(): string {
-  return `Usage: cpconfig [options]\n\n` +
+  return (
+    `Usage: cpconfig [options]\n\n` +
     `Options:\n` +
     `  --dry-run             Compute changes without writing files\n` +
     `  --json                Print the sync result as JSON\n` +
     `  --root <path>         Override the root directory used for file writes\n` +
     `  --gitignore <path>    Override the gitignore file path\n` +
     `  --config <path>       Load configuration from an explicit JSON file\n` +
-    `  --help, -h            Show this message\n`;
+    `  --help, -h            Show this message\n`
+  );
 }
 
 const mainEntry = process.argv[1] ? pathToFileURL(process.argv[1]).href : '';

@@ -38,13 +38,92 @@ describe('cli', () => {
       expect(stderr.toString()).toBe('');
 
       await expect(readFile(path.join(cwd, 'secrets/.env'), 'utf8')).resolves.toBe('SECRET=1');
-      await expect(readFile(path.join(cwd, 'config/app.json'), 'utf8')).resolves.toBe('{"flag":true}');
+      await expect(readFile(path.join(cwd, 'config/app.json'), 'utf8')).resolves.toBe(
+        '{"flag":true}',
+      );
 
       const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
       expect(gitignore).toContain('secrets/.env');
       expect(gitignore).toContain('config/app.json');
 
       expect(stdout.toString()).toMatch(/cpconfig apply/);
+    });
+  });
+
+  test('loads configuration from a referenced module', async () => {
+    await withTempDir(async (cwd) => {
+      const modulePath = path.join(cwd, 'cpconfig.config.mjs');
+
+      await writeFile(
+        modulePath,
+        `export default {\n  files: {\n    'module-output.txt': { contents: 'from module' }\n  }\n};\n`,
+      );
+
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            config: {
+              cpconfig: './cpconfig.config.mjs',
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const stdout = createBuffer();
+      const stderr = createBuffer();
+
+      const exitCode = await runCli([], { cwd, stdout, stderr });
+
+      expect(exitCode).toBe(0);
+      expect(stderr.toString()).toBe('');
+
+      await expect(readFile(path.join(cwd, 'module-output.txt'), 'utf8')).resolves.toBe(
+        'from module',
+      );
+      const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('module-output.txt');
+      expect(stdout.toString()).toContain('cpconfig apply');
+      expect(stdout.toString()).toContain('cpconfig.config.mjs');
+    });
+  });
+
+  test('supports config modules exporting factories', async () => {
+    await withTempDir(async (cwd) => {
+      const modulePath = path.join(cwd, 'cpconfig.factory.mjs');
+
+      await writeFile(
+        modulePath,
+        `export default async function buildConfig() {\n  await Promise.resolve();\n  return {\n    files: {\n      'factory.txt': { contents: 'from factory' }\n    },\n    options: {\n      gitignorePath: 'generated.ignore'\n    }\n  };\n}\n`,
+      );
+
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            cpconfig: './cpconfig.factory.mjs',
+          },
+          null,
+          2,
+        ),
+      );
+
+      const stdout = createBuffer();
+      const stderr = createBuffer();
+
+      const exitCode = await runCli([], { cwd, stdout, stderr });
+
+      expect(exitCode).toBe(0);
+      expect(stderr.toString()).toBe('');
+
+      await expect(readFile(path.join(cwd, 'factory.txt'), 'utf8')).resolves.toBe('from factory');
+      const gitignore = await readFile(path.join(cwd, 'generated.ignore'), 'utf8');
+      expect(gitignore).toContain('factory.txt');
+      expect(stdout.toString()).toContain('cpconfig.factory.mjs');
     });
   });
 
