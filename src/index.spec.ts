@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -175,6 +175,87 @@ describe('syncConfigs', () => {
 
       expect(result.files[0]?.action).toBe('updated');
       await expect(readFile(path.join(rootDir, 'dynamic.txt'), 'utf8')).resolves.toBe('value-2');
+    });
+  });
+
+  test('requires declared sentinels to appear in contents', async () => {
+    await withTempDir(async (rootDir) => {
+      await expect(
+        syncConfigs(
+          {
+            'invalid.txt': { contents: 'no sentinel here', sentinel: '__SENTINEL__' },
+          },
+          { rootDir },
+        ),
+      ).rejects.toThrow(/must include the configured sentinel/);
+    });
+  });
+
+  test('skips existing files missing the sentinel', async () => {
+    await withTempDir(async (rootDir) => {
+      const filePath = path.join(rootDir, 'config/managed.json');
+      await mkdir(path.dirname(filePath), { recursive: true });
+      await writeFile(filePath, '{"user":true}\n', 'utf8');
+
+      const result = await syncConfigs(
+        {
+          'config/managed.json': {
+            contents: '__SENTINEL__\n{"managed":true}\n',
+            sentinel: '__SENTINEL__',
+          },
+        },
+        { rootDir },
+      );
+
+      expect(result.files).toEqual([
+        expect.objectContaining({
+          path: 'config/managed.json',
+          action: 'unchanged',
+          managed: false,
+          skipped: false,
+          gitignored: false,
+          warning: expect.stringContaining('Not overwriting'),
+        }),
+      ]);
+
+      await expect(readFile(filePath, 'utf8')).resolves.toBe('{"user":true}\n');
+      await expect(readFile(path.join(rootDir, '.gitignore'), 'utf8')).rejects.toThrowError();
+    });
+  });
+
+  test('updates files that preserve the sentinel', async () => {
+    await withTempDir(async (rootDir) => {
+      await syncConfigs(
+        {
+          'sentinel.txt': {
+            contents: '// cpconfig\nvalue=1\n',
+            sentinel: '// cpconfig',
+          },
+        },
+        { rootDir },
+      );
+
+      const result = await syncConfigs(
+        {
+          'sentinel.txt': {
+            contents: '// cpconfig\nvalue=2\n',
+            sentinel: '// cpconfig',
+          },
+        },
+        { rootDir },
+      );
+
+      expect(result.files).toEqual([
+        expect.objectContaining({
+          path: 'sentinel.txt',
+          action: 'updated',
+          managed: true,
+          gitignored: true,
+        }),
+      ]);
+      await expect(readFile(path.join(rootDir, 'sentinel.txt'), 'utf8')).resolves.toBe(
+        '// cpconfig\nvalue=2\n',
+      );
     });
   });
 });

@@ -69,13 +69,16 @@ Most projects keep their file definitions in a dedicated module and call the bun
 }
 ```
 
-The CLI walks up from the current working directory, finds the nearest `package.json`, and reads the `cpconfig`
-definition (preferring `config.cpconfig`). When the value is a string, `cpconfig` resolves and imports that module
-using standard Node.js resolution. The module can export either:
+The CLI walks up from the current working directory, finds the nearest `package.json`, and reads the
+`config.cpconfig` entry. The value must be a string pointing at a module—top-level `cpconfig` keys or inline
+objects are rejected. `cpconfig` resolves the module using standard Node.js rules and expects it to export one of:
 
 - a default or named `config` object with `{ files, options }`;
 - a plain object map of files;
 - a factory function (sync or async) returning either of the above.
+
+Factory functions receive two arguments: the entire `package.json` `config` object (so you can read sibling settings)
+and the raw CLI argument array (e.g. `['--json']`). Use them to branch on runtime options or shared configurations.
 
 For example, `cpconfig.config.mjs` might look like:
 
@@ -87,9 +90,6 @@ export default {
   },
 };
 ```
-
-If you prefer, you can still embed the object directly in `package.json` under either `cpconfig` or `config.cpconfig`.
-Module exports simply provide a cleaner home for larger definitions or shared packages.
 
 - Run `npx cpconfig` manually whenever you need to refresh files.
 - Add `cpconfig` to `postinstall` to keep developer machines in sync automatically.
@@ -104,7 +104,10 @@ Module exports simply provide a cleaner home for larger definitions or shared pa
 | `gitignorePath` | `string` | `<rootDir>/.gitignore` | Custom location for the managed gitignore file. |
 
 Each config file can optionally set `gitignore: false` to opt out of the managed block, or provide a `mode`
-(integer) that is applied when the file is first created.
+(integer) that is applied when the file is first created. Add a `sentinel` string to embed your own marker
+inside the file (for example `// @cpconfig` or `<!-- cpconfig -->`). `cpconfig` only rewrites files that include
+their sentinel, so you never clobber hand-crafted files. Make sure the string appears in the requested contents.
+When an existing file is missing its sentinel, `cpconfig` leaves it untouched and prints a warning explaining why.
 
 ## Result object
 
@@ -113,7 +116,7 @@ Each config file can optionally set `gitignore: false` to opt out of the managed
 ```ts
 const result = await syncConfigs(files);
 
-result.files; // [{ path: 'config/.env.local', action: 'created', gitignored: true }, ...]
+result.files; // [{ path: 'config/.env.local', managed: true, action: 'created', gitignored: true }, ...]
 result.gitignore; // { updated: true, added: ['config/.env.local'], removed: [] }
 ```
 

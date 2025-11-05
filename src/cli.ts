@@ -26,13 +26,6 @@ type CliFlags = {
   helpRequested: boolean;
 };
 
-type ConfigPayload =
-  | ConfigMap
-  | {
-      files: ConfigMap;
-      options?: SyncOptions;
-    };
-
 type LoadedConfig = {
   files: ConfigMap;
   options: SyncOptions;
@@ -44,6 +37,7 @@ export async function runCli(
   args: string[] = process.argv.slice(2),
   { cwd = process.cwd(), stdout = process.stdout, stderr = process.stderr }: CliRunOptions = {},
 ): Promise<number> {
+  const cliArgs = [...args];
   const flags = parseFlags(args);
 
   if (flags.helpRequested) {
@@ -52,7 +46,7 @@ export async function runCli(
   }
 
   try {
-    const loaded = await loadConfig({ cwd, flags });
+    const loaded = await loadConfig({ cwd, flags, cliArgs });
     const options: SyncOptions = {
       ...loaded.options,
     };
@@ -75,6 +69,12 @@ export async function runCli(
     }
 
     const result = await syncConfigs(loaded.files, options);
+
+    for (const file of result.files) {
+      if (file.warning) {
+        stderr.write(`cpconfig: warning: ${file.warning}\n`);
+      }
+    }
 
     if (flags.json) {
       stdout.write(`${JSON.stringify(result, null, 2)}\n`);
@@ -156,9 +156,10 @@ function parseFlags(args: string[]): CliFlags {
 type LoadConfigInput = {
   cwd: string;
   flags: CliFlags;
+  cliArgs: readonly string[];
 };
 
-async function loadConfig({ cwd, flags }: LoadConfigInput): Promise<LoadedConfig> {
+async function loadConfig({ cwd, flags, cliArgs }: LoadConfigInput): Promise<LoadedConfig> {
   if (flags.configPath) {
     const filePath = path.resolve(cwd, flags.configPath);
     const payload = await readJsonFile(filePath);
@@ -173,42 +174,46 @@ async function loadConfig({ cwd, flags }: LoadConfigInput): Promise<LoadedConfig
   const { packageJsonPath, packageDir } = await findNearestPackageJson(cwd);
   const pkg = (await readJsonFile(packageJsonPath)) as PackageJson;
 
-  const rawPayload = pkg.cpconfig ?? pkg.config?.cpconfig;
-
-  if (!rawPayload) {
-    throw new Error(`No cpconfig definition found in ${packageJsonPath}`);
+  if (pkg.cpconfig !== undefined) {
+    throw new Error(
+      `Invalid cpconfig definition in ${packageJsonPath}. Move the value to config.cpconfig as a string module specifier.`,
+    );
   }
 
-  if (typeof rawPayload === 'string') {
-    const { parsed, source } = await loadConfigModule({
-      specifier: rawPayload,
-      packageDir,
-      origin: packageJsonPath,
-    });
+  const packageConfigValue = pkg.config;
 
-    return {
-      ...parsed,
-      packageDir,
-      source,
-    };
+  if (!isPlainObject(packageConfigValue)) {
+    throw new Error(
+      `Invalid cpconfig definition in ${packageJsonPath}. Expected config.cpconfig to reference a module using a string.`,
+    );
   }
 
-  const parsed = parseConfigPayload(rawPayload, packageJsonPath);
+  const moduleSpecifier = packageConfigValue.cpconfig;
+
+  if (typeof moduleSpecifier !== 'string' || moduleSpecifier.trim().length === 0) {
+    throw new Error(
+      `Invalid cpconfig definition in ${packageJsonPath}. Expected config.cpconfig to be a non-empty string module specifier.`,
+    );
+  }
+
+  const { parsed, source } = await loadConfigModule({
+    specifier: moduleSpecifier,
+    packageDir,
+    origin: packageJsonPath,
+    packageConfig: packageConfigValue,
+    cliArgs,
+  });
 
   return {
     ...parsed,
     packageDir,
-    source: packageJsonPath,
+    source,
   };
 }
 
-type ConfigSource = ConfigPayload | string;
-
 type PackageJson = {
-  cpconfig?: ConfigSource;
-  config?: {
-    cpconfig?: ConfigSource;
-  };
+  cpconfig?: unknown;
+  config?: Record<string, unknown>;
 };
 
 type ParsedConfig = {
@@ -239,9 +244,17 @@ type LoadConfigModuleInput = {
   specifier: string;
   packageDir: string;
   origin: string;
+  packageConfig: Record<string, unknown>;
+  cliArgs: readonly string[];
 };
 
-async function loadConfigModule({ specifier, packageDir, origin }: LoadConfigModuleInput) {
+async function loadConfigModule({
+  specifier,
+  packageDir,
+  origin,
+  packageConfig,
+  cliArgs,
+}: LoadConfigModuleInput) {
   const { resolvedPath, url } = resolveModuleSpecifier(specifier, packageDir);
 
   let imported: Record<string, unknown>;
@@ -255,7 +268,10 @@ async function loadConfigModule({ specifier, packageDir, origin }: LoadConfigMod
   }
 
   const exported = selectConfigExport(imported, resolvedPath);
-  const payload = await unwrapConfigFactory(exported, resolvedPath);
+  const payload = await unwrapConfigFactory(exported, resolvedPath, {
+    packageConfig,
+    cliArgs,
+  });
   const parsed = parseConfigPayload(payload, resolvedPath);
 
   return { parsed, source: resolvedPath };
@@ -308,10 +324,16 @@ function selectConfigExport(imported: Record<string, unknown>, resolvedPath: str
   );
 }
 
-async function unwrapConfigFactory(exported: unknown, resolvedPath: string): Promise<unknown> {
+async function unwrapConfigFactory(
+  exported: unknown,
+  resolvedPath: string,
+  context: { packageConfig: Record<string, unknown>; cliArgs: readonly string[] },
+): Promise<unknown> {
   if (typeof exported === 'function') {
     try {
-      const result = (exported as () => unknown)();
+      const result = (
+        exported as (config: Record<string, unknown>, cliArgs: readonly string[]) => unknown
+      )(context.packageConfig, context.cliArgs);
       if (isPromiseLike(result)) {
         return await result;
       }
@@ -404,6 +426,9 @@ function formatResult(result: SyncResult, flags: CliFlags, loaded: LoadedConfig)
 function formatFileLine(file: SyncResult['files'][number]): string {
   const status = file.action.padEnd(8, ' ');
   const base = `${status} ${file.path}`;
+  if (!file.managed) {
+    return `${base} (unmanaged)`;
+  }
   return file.gitignored ? `${base} (gitignored)` : base;
 }
 

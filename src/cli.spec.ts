@@ -12,16 +12,20 @@ const packageTemplate = {
 describe('cli', () => {
   test('applies configuration sourced from package.json', async () => {
     await withTempDir(async (cwd) => {
+      const modulePath = path.join(cwd, 'cpconfig.config.mjs');
+
+      await writeFile(
+        modulePath,
+        `export default {\n  files: {\n    'secrets/.env': { contents: 'SECRET=1' },\n    'config/app.json': { contents: '{"flag":true}' }\n  }\n};\n`,
+      );
+
       await writeFile(
         path.join(cwd, 'package.json'),
         JSON.stringify(
           {
             ...packageTemplate,
-            cpconfig: {
-              files: {
-                'secrets/.env': { contents: 'SECRET=1' },
-                'config/app.json': { contents: '{"flag":true}' },
-              },
+            config: {
+              cpconfig: './cpconfig.config.mjs',
             },
           },
           null,
@@ -97,7 +101,7 @@ describe('cli', () => {
 
       await writeFile(
         modulePath,
-        `export default async function buildConfig() {\n  await Promise.resolve();\n  return {\n    files: {\n      'factory.txt': { contents: 'from factory' }\n    },\n    options: {\n      gitignorePath: 'generated.ignore'\n    }\n  };\n}\n`,
+        `export default async function buildConfig(config, cliArgs) {\n  await Promise.resolve();\n  return {\n    files: {\n      'factory.txt': { contents: JSON.stringify({ config, cliArgs }) }\n    },\n    options: {\n      gitignorePath: config?.output ?? 'generated.ignore'\n    }\n  };\n}\n`,
       );
 
       await writeFile(
@@ -105,7 +109,11 @@ describe('cli', () => {
         JSON.stringify(
           {
             ...packageTemplate,
-            cpconfig: './cpconfig.factory.mjs',
+            config: {
+              cpconfig: './cpconfig.factory.mjs',
+              output: 'generated.ignore',
+              feature: 'enabled',
+            },
           },
           null,
           2,
@@ -115,29 +123,49 @@ describe('cli', () => {
       const stdout = createBuffer();
       const stderr = createBuffer();
 
-      const exitCode = await runCli([], { cwd, stdout, stderr });
+      const exitCode = await runCli(['--json'], { cwd, stdout, stderr });
 
       expect(exitCode).toBe(0);
       expect(stderr.toString()).toBe('');
 
-      await expect(readFile(path.join(cwd, 'factory.txt'), 'utf8')).resolves.toBe('from factory');
+      const fileContents = await readFile(path.join(cwd, 'factory.txt'), 'utf8');
+      const deserialised = JSON.parse(fileContents) as {
+        config: Record<string, unknown>;
+        cliArgs: string[];
+      };
+
+      expect(deserialised.config).toMatchObject({
+        cpconfig: './cpconfig.factory.mjs',
+        feature: 'enabled',
+        output: 'generated.ignore',
+      });
+      expect(deserialised.cliArgs).toEqual(['--json']);
+
       const gitignore = await readFile(path.join(cwd, 'generated.ignore'), 'utf8');
       expect(gitignore).toContain('factory.txt');
-      expect(stdout.toString()).toContain('cpconfig.factory.mjs');
+      const stdoutJson = JSON.parse(stdout.toString()) as {
+        gitignore: { path: string };
+      };
+      expect(stdoutJson.gitignore.path).toContain('generated.ignore');
     });
   });
 
   test('supports dry runs without writing files', async () => {
     await withTempDir(async (cwd) => {
+      const modulePath = path.join(cwd, 'cpconfig.dry.mjs');
+
+      await writeFile(
+        modulePath,
+        `export default {\n  files: {\n    'generated.txt': { contents: 'dry' }\n  }\n};\n`,
+      );
+
       await writeFile(
         path.join(cwd, 'package.json'),
         JSON.stringify(
           {
             ...packageTemplate,
             config: {
-              cpconfig: {
-                'generated.txt': { contents: 'dry' },
-              },
+              cpconfig: './cpconfig.dry.mjs',
             },
           },
           null,
@@ -167,7 +195,97 @@ describe('cli', () => {
       const exitCode = await runCli([], { cwd, stderr, stdout: createBuffer() });
 
       expect(exitCode).toBe(1);
-      expect(stderr.toString()).toMatch(/No cpconfig definition/);
+      expect(stderr.toString()).toMatch(
+        /Expected config\.cpconfig to reference a module using a string/,
+      );
+    });
+  });
+
+  test('warns when an existing file is missing the configured sentinel', async () => {
+    await withTempDir(async (cwd) => {
+      const modulePath = path.join(cwd, 'cpconfig.sentinel.mjs');
+
+      await writeFile(
+        modulePath,
+        `export default {\n  files: {\n    'managed.txt': { contents: '// sentinel\\nmanaged=true\\n', sentinel: '// sentinel' }\n  }\n};\n`,
+      );
+
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            config: {
+              cpconfig: './cpconfig.sentinel.mjs',
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const existingPath = path.join(cwd, 'managed.txt');
+      await writeFile(existingPath, 'managed=false\n', 'utf8');
+
+      const stdout = createBuffer();
+      const stderr = createBuffer();
+
+      const exitCode = await runCli([], { cwd, stdout, stderr });
+
+      expect(exitCode).toBe(0);
+      expect(stderr.toString()).toMatch(/Not overwriting "managed.txt"/);
+
+      await expect(readFile(existingPath, 'utf8')).resolves.toBe('managed=false\n');
+      await expect(readFile(path.join(cwd, '.gitignore'), 'utf8')).rejects.toThrow();
+      expect(stdout.toString()).toContain('managed.txt (unmanaged)');
+    });
+  });
+
+  test('emits helpful errors when cpconfig is defined at the package root', async () => {
+    await withTempDir(async (cwd) => {
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            cpconfig: './cpconfig.config.mjs',
+          },
+          null,
+          2,
+        ),
+      );
+
+      const stderr = createBuffer();
+      const exitCode = await runCli([], { cwd, stderr, stdout: createBuffer() });
+
+      expect(exitCode).toBe(1);
+      expect(stderr.toString()).toMatch(/Move the value to config\.cpconfig/);
+    });
+  });
+
+  test('emits helpful errors when config.cpconfig is not a string', async () => {
+    await withTempDir(async (cwd) => {
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            config: {
+              cpconfig: { invalid: true },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const stderr = createBuffer();
+      const exitCode = await runCli([], { cwd, stderr, stdout: createBuffer() });
+
+      expect(exitCode).toBe(1);
+      expect(stderr.toString()).toMatch(
+        /Expected config\.cpconfig to be a non-empty string module specifier/,
+      );
     });
   });
 });
