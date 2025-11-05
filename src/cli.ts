@@ -184,13 +184,6 @@ async function loadConfig({ cwd, flags, cliArgs }: LoadConfigInput): Promise<Loa
 
   const { packageJsonPath, packageDir } = await findNearestPackageJson(cwd);
   const pkg = (await readJsonFile(packageJsonPath)) as PackageJson;
-
-  if (pkg.cpconfig !== undefined) {
-    throw new Error(
-      `Invalid cpconfig definition in ${packageJsonPath}. Move the value to config.cpconfig as a string module specifier.`,
-    );
-  }
-
   const packageConfigValue = pkg.config;
 
   if (!isPlainObject(packageConfigValue)) {
@@ -211,7 +204,7 @@ async function loadConfig({ cwd, flags, cliArgs }: LoadConfigInput): Promise<Loa
     specifier: moduleSpecifier,
     packageDir,
     origin: packageJsonPath,
-    packageConfig: packageConfigValue,
+    pkg,
     cliArgs,
   });
 
@@ -255,7 +248,7 @@ type LoadConfigModuleInput = {
   specifier: string;
   packageDir: string;
   origin: string;
-  packageConfig: Record<string, unknown>;
+  pkg: Record<string, unknown>;
   cliArgs: readonly string[];
 };
 
@@ -263,7 +256,7 @@ async function loadConfigModule({
   specifier,
   packageDir,
   origin,
-  packageConfig,
+  pkg,
   cliArgs,
 }: LoadConfigModuleInput) {
   const { resolvedPath, url } = resolveModuleSpecifier(specifier, packageDir);
@@ -275,12 +268,13 @@ async function loadConfigModule({
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
       `Failed to load cpconfig module "${specifier}" referenced from ${origin}: ${message}`,
+      { cause: error },
     );
   }
 
   const exported = selectConfigExport(imported, resolvedPath);
   const payload = await unwrapConfigFactory(exported, resolvedPath, {
-    packageConfig,
+    pkg,
     cliArgs,
   });
   const parsed = parseConfigPayload(payload, resolvedPath);
@@ -573,13 +567,16 @@ function selectConfigExport(imported: Record<string, unknown>, resolvedPath: str
 async function unwrapConfigFactory(
   exported: unknown,
   resolvedPath: string,
-  context: { packageConfig: Record<string, unknown>; cliArgs: readonly string[] },
+  context: { pkg: Record<string, unknown>; cliArgs: readonly string[] },
 ): Promise<unknown> {
   if (typeof exported === 'function') {
     try {
       const result = (
-        exported as (config: Record<string, unknown>, cliArgs: readonly string[]) => unknown
-      )(context.packageConfig, context.cliArgs);
+        exported as (
+          config: Record<string, unknown>,
+          options: { args: readonly string[] },
+        ) => unknown
+      )(context.pkg, { args: context.cliArgs });
       if (isPromiseLike(result)) {
         return await result;
       }

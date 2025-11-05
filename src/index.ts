@@ -408,7 +408,17 @@ function normalizeGitignoreEntry(value: string): string {
     return '';
   }
 
-  return trimmed.replace(/^\.\//, '').replace(/\\/g, '/');
+  const negated = trimmed.startsWith('!');
+  const rawPath = negated ? trimmed.slice(1) : trimmed;
+  const normalizedPath = rawPath.replace(/^\.\//, '').replace(/\\/g, '/');
+
+  if (!normalizedPath) {
+    return '';
+  }
+
+  const formatted = formatGitignoreEntry(normalizedPath);
+
+  return negated ? `!${formatted}` : formatted;
 }
 
 function uniqueNormalized(entries: string[]): string[] {

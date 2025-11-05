@@ -37,6 +37,25 @@ describe('syncConfigs', () => {
     });
   });
 
+  test('manages gitignore entries for dot directories', async () => {
+    await withTempDir(async (rootDir) => {
+      const result = await syncConfigs(
+        {
+          '.github/actionlint.yml': {
+            contents: 'name: actionlint\n',
+          },
+        },
+        { rootDir },
+      );
+
+      expect(result.gitignore.updated).toBe(true);
+      expect(result.gitignore.added).toEqual(['/.github/actionlint.yml']);
+
+      const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('/.github/actionlint.yml');
+    });
+  });
+
   test('is idempotent when rerun with same definitions', async () => {
     await withTempDir(async (rootDir) => {
       const files = {
