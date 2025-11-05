@@ -97,7 +97,7 @@ describe('cli', () => {
 
   test('loads configuration from a TypeScript module when runtime support is available', async () => {
     await withTempDir(async (cwd) => {
-      await linkLocalModule(cwd, 'typescript');
+      await linkLocalModule(cwd, 'tsx');
 
       const modulePath = path.join(cwd, 'cpconfig.config.ts');
 
