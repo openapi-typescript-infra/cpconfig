@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { promises as fs } from 'node:fs';
-import { createRequire } from 'node:module';
+import { promises as fs, readFileSync } from 'node:fs';
+import ModuleConstructor, { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -10,6 +10,18 @@ import {
   type SyncOptions,
   type SyncResult,
 } from './index';
+
+const TYPE_SCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.cts', '.mts']);
+
+type TypeScriptModule = typeof import('typescript');
+
+type TypeScriptSupportState = {
+  mode: 'require' | 'import';
+  source: string;
+};
+
+let cachedTypeScriptSupport: TypeScriptSupportState | undefined;
+let manualTypeScriptHookInstalled = false;
 
 type CliRunOptions = {
   cwd?: string;
@@ -259,7 +271,7 @@ async function loadConfigModule({
 
   let imported: Record<string, unknown>;
   try {
-    imported = await import(url);
+    imported = await importResolvedModule({ resolvedPath, url, packageDir });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -304,6 +316,246 @@ function resolveModuleSpecifier(
       `Unable to resolve cpconfig module "${specifier}" from ${packageDir}: ${message}`,
     );
   }
+}
+
+async function importResolvedModule({
+  resolvedPath,
+  url,
+  packageDir,
+}: {
+  resolvedPath: string;
+  url: string;
+  packageDir: string;
+}): Promise<Record<string, unknown>> {
+  if (!isTypeScriptModule(resolvedPath)) {
+    return (await import(url)) as Record<string, unknown>;
+  }
+
+  const requireFromPkg = createRequire(path.join(packageDir, 'package.json'));
+  const support = await ensureTypeScriptSupport(resolvedPath, requireFromPkg);
+
+  if (support.mode === 'require') {
+    try {
+      return requireFromPkg(resolvedPath) as Record<string, unknown>;
+    } catch (error) {
+      if (isErrRequireEsm(error)) {
+        return (await import(url)) as Record<string, unknown>;
+      }
+      throw error;
+    }
+  }
+
+  return (await import(url)) as Record<string, unknown>;
+}
+
+function isTypeScriptModule(filePath: string): boolean {
+  if (filePath.endsWith('.d.ts')) {
+    return false;
+  }
+
+  const extension = path.extname(filePath).toLowerCase();
+  return TYPE_SCRIPT_EXTENSIONS.has(extension);
+}
+
+type LoaderAttemptResult =
+  | { status: 'loaded'; state: TypeScriptSupportState }
+  | { status: 'missing' }
+  | { status: 'failed'; message: string };
+
+async function ensureTypeScriptSupport(
+  modulePath: string,
+  requireFromPkg: NodeJS.Require,
+): Promise<TypeScriptSupportState> {
+  if (cachedTypeScriptSupport) {
+    return cachedTypeScriptSupport;
+  }
+
+  const missing: string[] = [];
+  const errors: string[] = [];
+
+  const candidates: Array<{ label: string; run: () => Promise<LoaderAttemptResult> }> = [
+    {
+      label: 'ts-node/register/transpile-only',
+      run: () => registerCommonJsLoader(requireFromPkg, 'ts-node/register/transpile-only'),
+    },
+    {
+      label: 'ts-node/register',
+      run: () => registerCommonJsLoader(requireFromPkg, 'ts-node/register'),
+    },
+    {
+      label: 'typescript',
+      run: () => installManualTypeScriptHook(requireFromPkg),
+    },
+  ];
+
+  for (const candidate of candidates) {
+    const result = await candidate.run();
+
+    if (result.status === 'loaded') {
+      cachedTypeScriptSupport = result.state;
+      return result.state;
+    }
+
+    if (result.status === 'missing') {
+      missing.push(candidate.label);
+      continue;
+    }
+
+    errors.push(`${candidate.label}: ${result.message}`);
+  }
+
+  const messageLines = [
+    `Unable to load TypeScript configuration module at ${modulePath}.`,
+    'Install one of "ts-node" or "typescript" in your project to enable TypeScript configs.',
+  ];
+
+  if (missing.length > 0) {
+    messageLines.push(`Missing dependencies: ${missing.join(', ')}`);
+  }
+
+  if (errors.length > 0) {
+    messageLines.push('Errors encountered while initialising TypeScript support:');
+    for (const error of errors) {
+      messageLines.push(`  - ${error}`);
+    }
+  }
+
+  throw new Error(messageLines.join('\n'));
+}
+
+async function registerCommonJsLoader(
+  requireFromPkg: NodeJS.Require,
+  specifier: string,
+): Promise<LoaderAttemptResult> {
+  try {
+    requireFromPkg(specifier);
+    return { status: 'loaded', state: { mode: 'require', source: specifier } };
+  } catch (error) {
+    if (isModuleNotFoundError(error, specifier)) {
+      return { status: 'missing' };
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: 'failed', message };
+  }
+}
+
+async function installManualTypeScriptHook(
+  requireFromPkg: NodeJS.Require,
+): Promise<LoaderAttemptResult> {
+  if (manualTypeScriptHookInstalled) {
+    return { status: 'loaded', state: { mode: 'require', source: 'typescript' } };
+  }
+
+  let typescript: TypeScriptModule;
+  try {
+    typescript = requireFromPkg('typescript') as TypeScriptModule;
+  } catch (error) {
+    if (isModuleNotFoundError(error, 'typescript')) {
+      return { status: 'missing' };
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    return { status: 'failed', message };
+  }
+
+  const extensions = (
+    ModuleConstructor as unknown as {
+      _extensions: Record<string, (module: NodeJS.Module, filename: string) => void>;
+    }
+  )._extensions;
+
+  for (const extension of TYPE_SCRIPT_EXTENSIONS) {
+    if (!extensions[extension]) {
+      extensions[extension] = createTypeScriptExtensionHandler(typescript, extension);
+    }
+  }
+
+  manualTypeScriptHookInstalled = true;
+  return { status: 'loaded', state: { mode: 'require', source: 'typescript' } };
+}
+
+function createTypeScriptExtensionHandler(
+  typescript: TypeScriptModule,
+  extension: string,
+): (module: NodeJS.Module, filename: string) => void {
+  return (module, filename) => {
+    const source = readFileSync(filename, 'utf8');
+    const result = typescript.transpileModule(source, {
+      compilerOptions: createTypeScriptTranspileOptions(typescript, extension),
+      fileName: filename,
+      reportDiagnostics: true,
+    });
+
+    if (result.diagnostics && result.diagnostics.length > 0) {
+      const formatted = formatTypeScriptDiagnostics(typescript, result.diagnostics, filename);
+      throw new Error(`Failed to compile ${filename}:\n${formatted}`);
+    }
+
+    const compiled = module as unknown as { _compile(code: string, filename: string): void };
+    compiled._compile(result.outputText, filename);
+  };
+}
+
+function createTypeScriptTranspileOptions(
+  typescript: TypeScriptModule,
+  extension: string,
+): import('typescript').CompilerOptions {
+  const options: import('typescript').CompilerOptions = {
+    module: typescript.ModuleKind.CommonJS,
+    target: typescript.ScriptTarget.ES2020,
+    esModuleInterop: true,
+    sourceMap: false,
+    allowSyntheticDefaultImports: true,
+    resolveJsonModule: true,
+  };
+
+  if (extension === '.tsx') {
+    options.jsx = typescript.JsxEmit.React;
+  }
+
+  return options;
+}
+
+function formatTypeScriptDiagnostics(
+  typescript: TypeScriptModule,
+  diagnostics: readonly import('typescript').Diagnostic[],
+  filename: string,
+): string {
+  const host: import('typescript').FormatDiagnosticsHost = {
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => path.dirname(filename),
+    getNewLine: () => '\n',
+  };
+
+  return typescript.formatDiagnostics(diagnostics, host);
+}
+
+function isModuleNotFoundError(error: unknown, specifier: string): boolean {
+  if (!error || typeof error !== 'object') {
+    return false;
+  }
+
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code !== 'MODULE_NOT_FOUND') {
+    return false;
+  }
+
+  const message = (error as NodeJS.ErrnoException).message;
+  if (typeof message !== 'string') {
+    return false;
+  }
+
+  return message.includes(`'${specifier}'`);
+}
+
+function isErrRequireEsm(error: unknown): boolean {
+  return Boolean(
+    error &&
+      typeof error === 'object' &&
+      'code' in (error as Record<string, unknown>) &&
+      (error as NodeJS.ErrnoException).code === 'ERR_REQUIRE_ESM',
+  );
 }
 
 function selectConfigExport(imported: Record<string, unknown>, resolvedPath: string): unknown {

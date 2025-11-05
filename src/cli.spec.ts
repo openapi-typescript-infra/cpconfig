@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, test } from 'vitest';
@@ -92,6 +92,48 @@ describe('cli', () => {
       expect(gitignore).toContain('module-output.txt');
       expect(stdout.toString()).toContain('cpconfig apply');
       expect(stdout.toString()).toContain('cpconfig.config.mjs');
+    });
+  });
+
+  test('loads configuration from a TypeScript module when runtime support is available', async () => {
+    await withTempDir(async (cwd) => {
+      await linkLocalModule(cwd, 'typescript');
+
+      const modulePath = path.join(cwd, 'cpconfig.config.ts');
+
+      await writeFile(
+        modulePath,
+        `export default {\n  files: {\n    'ts-output.txt': { contents: 'from typescript' }\n  }\n};\n`,
+      );
+
+      await writeFile(
+        path.join(cwd, 'package.json'),
+        JSON.stringify(
+          {
+            ...packageTemplate,
+            config: {
+              cpconfig: './cpconfig.config.ts',
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const stdout = createBuffer();
+      const stderr = createBuffer();
+
+      const exitCode = await runCli([], { cwd, stdout, stderr });
+
+      expect(exitCode).toBe(0);
+      expect(stderr.toString()).toBe('');
+
+      await expect(readFile(path.join(cwd, 'ts-output.txt'), 'utf8')).resolves.toBe(
+        'from typescript',
+      );
+
+      const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
+      expect(gitignore).toContain('ts-output.txt');
     });
   });
 
@@ -289,6 +331,27 @@ describe('cli', () => {
     });
   });
 });
+
+async function linkLocalModule(cwd: string, moduleName: string): Promise<void> {
+  const source = path.join(process.cwd(), 'node_modules', moduleName);
+  const destinationDir = path.join(cwd, 'node_modules');
+  const destination = path.join(destinationDir, moduleName);
+
+  await mkdir(destinationDir, { recursive: true });
+
+  try {
+    await symlink(source, destination, 'dir');
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'EEXIST') {
+      return;
+    }
+    if (code === 'ENOENT') {
+      throw new Error(`Module ${moduleName} is not installed under node_modules`);
+    }
+    throw error;
+  }
+}
 
 async function withTempDir<T>(callback: (cwd: string) => Promise<T>): Promise<T> {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'cpconfig-cli-'));
