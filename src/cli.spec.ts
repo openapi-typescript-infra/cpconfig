@@ -47,8 +47,8 @@ describe('cli', () => {
       );
 
       const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
-      expect(gitignore).toContain('secrets/.env');
-      expect(gitignore).toContain('config/app.json');
+      expect(gitignore).toContain('/secrets/.env');
+      expect(gitignore).toContain('/config/app.json');
 
       expect(stdout.toString()).toMatch(/cpconfig apply/);
     });
@@ -89,7 +89,7 @@ describe('cli', () => {
         'from module',
       );
       const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
-      expect(gitignore).toContain('module-output.txt');
+      expect(gitignore).toContain('/module-output.txt');
       expect(stdout.toString()).toContain('cpconfig apply');
       expect(stdout.toString()).toContain('cpconfig.config.mjs');
     });
@@ -133,7 +133,7 @@ describe('cli', () => {
       );
 
       const gitignore = await readFile(path.join(cwd, '.gitignore'), 'utf8');
-      expect(gitignore).toContain('ts-output.txt');
+      expect(gitignore).toContain('/ts-output.txt');
     });
   });
 
@@ -184,7 +184,7 @@ describe('cli', () => {
       expect(deserialised.cliArgs).toEqual(['--json']);
 
       const gitignore = await readFile(path.join(cwd, 'generated.ignore'), 'utf8');
-      expect(gitignore).toContain('factory.txt');
+      expect(gitignore).toContain('/factory.txt');
       const stdoutJson = JSON.parse(stdout.toString()) as {
         gitignore: { path: string };
       };

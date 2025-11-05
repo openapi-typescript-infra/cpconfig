@@ -21,7 +21,7 @@ describe('syncConfigs', () => {
 
       expect(result.files.map(({ action }) => action)).toEqual(['created', 'created']);
       expect(result.gitignore.updated).toBe(true);
-      expect(result.gitignore.added).toEqual(['env/.env.local', '.secrets.yml']);
+      expect(result.gitignore.added).toEqual(['/env/.env.local', '/.secrets.yml']);
 
       await expect(readFile(path.join(rootDir, 'env/.env.local'), 'utf8')).resolves.toBe(
         'TOKEN=secret',
@@ -32,8 +32,8 @@ describe('syncConfigs', () => {
 
       const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
       expect(gitignore).toContain('# Managed by cpconfig');
-      expect(gitignore).toContain('env/.env.local');
-      expect(gitignore).toContain('.secrets.yml');
+      expect(gitignore).toContain('/env/.env.local');
+      expect(gitignore).toContain('/.secrets.yml');
     });
   });
 
@@ -74,11 +74,11 @@ describe('syncConfigs', () => {
       ]);
       expect(result.gitignore.updated).toBe(true);
       expect(result.gitignore.added).toEqual([]);
-      expect(result.gitignore.removed).toEqual(['config/b.json']);
+      expect(result.gitignore.removed).toEqual(['/config/b.json']);
 
       const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
-      expect(gitignore).toContain('config/a.json');
-      expect(gitignore).not.toContain('config/b.json');
+      expect(gitignore).toContain('/config/a.json');
+      expect(gitignore).not.toContain('/config/b.json');
     });
   });
 
@@ -116,8 +116,8 @@ describe('syncConfigs', () => {
       );
 
       const gitignore = await readFile(path.join(rootDir, '.gitignore'), 'utf8');
-      expect(gitignore).toContain('secret.log');
-      expect(gitignore).not.toContain('visible.log');
+      expect(gitignore).toContain('/secret.log');
+      expect(gitignore).not.toContain('/visible.log');
     });
   });
 

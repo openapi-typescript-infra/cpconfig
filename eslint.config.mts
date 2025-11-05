@@ -12,6 +12,6 @@ export default defineConfig([
   },
   tseslint.configs.recommended,
   {
-    ignores: ["./build/**", "node_modules/**"],
+    ignores: ["./build/**", "node_modules/**", ".yarn/**"],
   },
 ]);

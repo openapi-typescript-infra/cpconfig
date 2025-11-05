@@ -242,11 +242,14 @@ function normalizeFiles(files: ConfigMap, rootDir: string): NormalizedConfigFile
       }
     }
 
+    const gitignoreEntry =
+      entry.gitignore === false ? null : formatGitignoreEntry(normalizedRelative);
+
     return {
       absolutePath,
       relativePath: normalizedRelative,
       contents,
-      gitignoreEntry: entry.gitignore === false ? null : normalizedRelative,
+      gitignoreEntry,
       mode: entry.mode,
       sentinel,
     } satisfies NormalizedConfigFile;
@@ -282,6 +285,14 @@ function resolveContents(rawContents: ConfigEntry['contents'], filePath: string)
 function normalizeRelativePath(relativePath: string): string {
   const posix = relativePath.split(path.sep).join('/');
   return posix.replace(/^\.\/(.*)/, '$1');
+}
+
+function formatGitignoreEntry(relativePath: string): string {
+  if (relativePath.startsWith('/')) {
+    return relativePath;
+  }
+
+  return `/${relativePath}`;
 }
 
 async function syncFile(
