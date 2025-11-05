@@ -9,7 +9,7 @@ import {
   type ConfigEntry,
   type SyncOptions,
   type SyncResult,
-} from './index';
+} from './index.js';
 
 const TYPE_SCRIPT_EXTENSIONS = new Set(['.ts', '.tsx', '.cts', '.mts']);
 
