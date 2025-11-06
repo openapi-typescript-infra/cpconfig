@@ -23,7 +23,7 @@
     "declaration": true,
     "sourceMap": true,
     "outDir": "./build",
-    "incremental": true,
+    "incremental": false,
     "isolatedModules": true,
     "strict": true,
     "baseUrl": "./src",
