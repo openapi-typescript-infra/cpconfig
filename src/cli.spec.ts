@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promis
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, test } from 'vitest';
-import { runCli } from './cli-functions';
+import { runCli } from './cli-functions.js';
 
 const packageTemplate = {
   name: 'cpconfig-fixture',
