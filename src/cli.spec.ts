@@ -1,13 +1,17 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { describe, expect, test } from 'vitest';
+import { beforeAll, describe, expect, test } from 'vitest';
 import { runCli } from './cli-functions.js';
 
 const packageTemplate = {
   name: 'cpconfig-fixture',
   version: '0.0.0-test',
 };
+
+beforeAll(async () => {
+  delete process.env.CI;
+});
 
 describe('cli', () => {
   test('applies configuration sourced from package.json', async () => {
