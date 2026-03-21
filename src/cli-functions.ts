@@ -532,18 +532,18 @@ function isModuleNotFoundError(error: unknown, specifier: string): boolean {
 function isErrRequireEsm(error: unknown): boolean {
   return Boolean(
     error &&
-      typeof error === 'object' &&
-      'code' in (error as Record<string, unknown>) &&
-      (error as NodeJS.ErrnoException).code === 'ERR_REQUIRE_ESM',
+    typeof error === 'object' &&
+    'code' in (error as Record<string, unknown>) &&
+    (error as NodeJS.ErrnoException).code === 'ERR_REQUIRE_ESM',
   );
 }
 
 function isUnknownFileExtensionError(error: unknown): boolean {
   return Boolean(
     error &&
-      typeof error === 'object' &&
-      'code' in (error as Record<string, unknown>) &&
-      (error as NodeJS.ErrnoException).code === 'ERR_UNKNOWN_FILE_EXTENSION',
+    typeof error === 'object' &&
+    'code' in (error as Record<string, unknown>) &&
+    (error as NodeJS.ErrnoException).code === 'ERR_UNKNOWN_FILE_EXTENSION',
   );
 }
 
@@ -679,8 +679,8 @@ function formatFileLine(file: SyncResult['files'][number]): string {
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(
     value &&
-      typeof value === 'object' &&
-      Object.prototype.toString.call(value) === '[object Object]',
+    typeof value === 'object' &&
+    Object.prototype.toString.call(value) === '[object Object]',
   );
 }
 
