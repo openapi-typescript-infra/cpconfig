@@ -86,10 +86,12 @@ export async function runCli(
       }
     }
 
-    if (flags.json) {
-      stdout.write(`${JSON.stringify(result, null, 2)}\n`);
-    } else {
-      stdout.write(formatResult(result, flags, loaded));
+    if (!process.env.CI) {
+      if (flags.json) {
+        stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      } else {
+        stdout.write(formatResult(result, flags, loaded));
+      }
     }
 
     return 0;
