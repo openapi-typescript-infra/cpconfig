@@ -8,6 +8,7 @@
   "author": "Developers <developers@pyralis.com>",
   "license": "UNLICENSED",
   "packageManager": "yarn@3.8.5",
+  "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.build.json && chmod +x build/cli.js",
     "clean": "yarn dlx rimraf ./dist",
